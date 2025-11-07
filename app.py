@@ -1,8 +1,9 @@
-from flask import Flask, render_template, request, redirect, url_for, send_file, jsonify
 import os
+import zipfile
+from flask import Flask, render_template, request, send_file
 import pdfplumber
-from PyPDF2 import PdfReader
-from zipfile import ZipFile
+from PyPDF2 import PdfWriter
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 
@@ -12,52 +13,41 @@ OUTPUT_FOLDER = "outputs"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-@app.route('/')
+@app.route("/")
 def index():
-    processed_files = os.listdir(OUTPUT_FOLDER)
-    return render_template("index.html", processed_files=processed_files)
+    return render_template("index.html")
 
-@app.route('/upload', methods=['POST'])
-def upload():
-    files = request.files.getlist("pdf_files")
-    for file in files:
-        if file.filename.endswith(".pdf"):
-            path = os.path.join(UPLOAD_FOLDER, file.filename)
-            file.save(path)
-    return redirect(url_for("index"))
+@app.route("/upload", methods=["POST"])
+def upload_file():
+    if "pdf_file" not in request.files:
+        return "No file part"
 
-@app.route('/process', methods=['POST'])
-def process_files():
-    pdf_files = [f for f in os.listdir(UPLOAD_FOLDER) if f.endswith(".pdf")]
-    processed_files = []
+    file = request.files["pdf_file"]
+    if file.filename == "":
+        return "No selected file"
 
-    for pdf_file in pdf_files:
-        pdf_path = os.path.join(UPLOAD_FOLDER, pdf_file)
-        text_path = os.path.join(OUTPUT_FOLDER, pdf_file.replace(".pdf", ".txt"))
+    filename = secure_filename(file.filename)
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(filepath)
 
-        # ดึงข้อความจาก PDF
-        with pdfplumber.open(pdf_path) as pdf:
-            text = ""
-            for page in pdf.pages:
-                text += page.extract_text() or ""
+    # เริ่มประมวลผล PDF
+    with pdfplumber.open(filepath) as pdf:
+        for i, page in enumerate(pdf.pages):
+            writer = PdfWriter()
+            writer.add_page(page.to_pdf().pages[0])  # ใช้ PyPDF2 เขียนออก
+            output_path = os.path.join(OUTPUT_FOLDER, f"page_{i+1}.pdf")
+            with open(output_path, "wb") as f_out:
+                writer.write(f_out)
 
-        with open(text_path, "w", encoding="utf-8") as f:
-            f.write(text)
+    # รวมเป็น ZIP
+    zip_filename = "results.zip"
+    zip_path = os.path.join(OUTPUT_FOLDER, zip_filename)
+    with zipfile.ZipFile(zip_path, "w") as zipf:
+        for file_name in os.listdir(OUTPUT_FOLDER):
+            if file_name.endswith(".pdf"):
+                zipf.write(os.path.join(OUTPUT_FOLDER, file_name), file_name)
 
-        processed_files.append(pdf_file)
-
-    return jsonify({
-        "status": "done",
-        "processed_files": processed_files
-    })
-
-@app.route('/download_all')
-def download_all():
-    zip_path = "all_texts.zip"
-    with ZipFile(zip_path, "w") as zipf:
-        for file in os.listdir(OUTPUT_FOLDER):
-            zipf.write(os.path.join(OUTPUT_FOLDER, file), arcname=file)
     return send_file(zip_path, as_attachment=True)
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
