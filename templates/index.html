@@ -1,14 +1,124 @@
 <!DOCTYPE html>
 <html lang="th">
 <head>
-    <meta charset="UTF-8">
-    <title>PDF Split & Group by SKU</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PDF Split by Order & SKU</title>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <h2>อัปโหลดไฟล์ PDF เดียว</h2>
-    <form action="/upload" method="post" enctype="multipart/form-data">
-        <input type="file" name="pdf_files" accept="application/pdf" multiple required>
-        <button type="submit">อัปโหลดและประมวลผล</button>
+  <div class="card">
+    <h1>แยก PDF ตาม Order ID และ SKU</h1>
+
+    <form id="upload-form">
+      <label class="file-label">
+        เลือกไฟล์ PDF
+        <input type="file" name="file" accept="application/pdf" required>
+      </label>
+      <div class="actions">
+        <button class="btn" type="submit">อัปโหลดและเริ่ม</button>
+      </div>
     </form>
+
+    <div class="status-panel" style="display:none;">
+      <div class="status-line">
+        <div class="status-text">สถานะ: <span id="status-text">Queued</span></div>
+        <div class="progress-wrap">
+          <div id="progress-bar" class="progress-bar"><div id="progress-fill" class="progress-fill" style="width:0%"></div></div>
+          <div id="progress-percent">0%</div>
+        </div>
+      </div>
+
+      <div id="message" class="message"></div>
+
+      <h3>ไฟล์ที่รวมเสร็จแล้ว</h3>
+      <ul id="file-list"></ul>
+
+      <div id="download-area" style="margin-top:12px;"></div>
+    </div>
+  </div>
+
+<script>
+const form = document.getElementById('upload-form');
+const statusPanel = document.querySelector('.status-panel');
+const statusText = document.getElementById('status-text');
+const progressFill = document.getElementById('progress-fill');
+const progressPercent = document.getElementById('progress-percent');
+const messageDiv = document.getElementById('message');
+const fileList = document.getElementById('file-list');
+const downloadArea = document.getElementById('download-area');
+
+let pollInterval = null;
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const files = form.querySelector('input[type=file]').files;
+  if (!files || files.length === 0) return alert('เลือกไฟล์ก่อน');
+
+  const fd = new FormData();
+  fd.append('file', files[0]);
+
+  // start upload
+  statusPanel.style.display = 'block';
+  statusText.textContent = 'กำลังอัปโหลด...';
+  messageDiv.textContent = '';
+
+  const res = await fetch('/upload', { method: 'POST', body: fd });
+  if (!res.ok && res.status !== 202) {
+    const txt = await res.text();
+    statusText.textContent = 'Upload failed';
+    messageDiv.textContent = txt;
+    return;
+  }
+  const data = await res.json();
+  const jobId = data.job_id;
+  const statusUrl = data.status_url;
+
+  statusText.textContent = 'Queued';
+  progressFill.style.width = '0%';
+  progressPercent.textContent = '0%';
+  fileList.innerHTML = '';
+  downloadArea.innerHTML = '';
+
+  // poll
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(async () => {
+    try {
+      const st = await fetch(statusUrl);
+      if (!st.ok) {
+        throw new Error('Status fetch failed');
+      }
+      const info = await st.json();
+      statusText.textContent = info.status;
+      const prog = info.progress || 0;
+      progressFill.style.width = prog + '%';
+      progressPercent.textContent = prog + '%';
+      messageDiv.textContent = info.message || '';
+
+      // update file list
+      fileList.innerHTML = '';
+      (info.files || []).forEach(f => {
+        const li = document.createElement('li');
+        li.textContent = f;
+        fileList.appendChild(li);
+      });
+
+      if (info.status === 'done' && info.zip) {
+        statusText.textContent = 'Completed';
+        clearInterval(pollInterval);
+        downloadArea.innerHTML = `<a class="btn" href="${info.zip}">ดาวน์โหลดทั้งหมด (ZIP)</a>`;
+      } else if (info.status === 'error') {
+        clearInterval(pollInterval);
+        messageDiv.textContent += '\\nมีข้อผิดพลาดในการประมวลผล';
+      }
+    } catch (err) {
+      console.error(err);
+      clearInterval(pollInterval);
+      statusText.textContent = 'Error';
+      messageDiv.textContent = 'ไม่สามารถดึงสถานะได้';
+    }
+  }, 1000);
+});
+</script>
 </body>
 </html>
