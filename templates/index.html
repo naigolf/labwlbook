@@ -1,163 +1,124 @@
 <!DOCTYPE html>
 <html lang="th">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PDF Order Splitter</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PDF Split by Order & SKU</title>
   <link rel="stylesheet" href="/static/style.css">
-  <style>
-    body {
-      font-family: "Prompt", sans-serif;
-      background: #f7f8fa;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: flex-start;
-      min-height: 100vh;
-    }
-
-    h1 {
-      margin-top: 50px;
-      text-align: center;
-      color: #2b2b2b;
-      font-size: 2em;
-    }
-
-    .upload-container {
-      background: white;
-      padding: 30px 40px;
-      margin-top: 30px;
-      border-radius: 20px;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
-      width: 90%;
-      max-width: 500px;
-      text-align: center;
-    }
-
-    input[type="file"] {
-      display: block;
-      margin: 20px auto;
-    }
-
-    button {
-      background-color: #4CAF50;
-      color: white;
-      border: none;
-      padding: 12px 30px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 16px;
-      transition: background-color 0.3s;
-    }
-
-    button:hover {
-      background-color: #45a049;
-    }
-
-    .progress-container {
-      margin-top: 30px;
-      width: 100%;
-      background-color: #e0e0e0;
-      border-radius: 10px;
-      overflow: hidden;
-      height: 25px;
-    }
-
-    .progress-bar {
-      width: 0%;
-      height: 100%;
-      background-color: #4CAF50;
-      text-align: center;
-      color: white;
-      line-height: 25px;
-      transition: width 0.3s;
-    }
-
-    .status {
-      margin-top: 15px;
-      font-weight: 500;
-      color: #333;
-    }
-
-    .result {
-      margin-top: 30px;
-      text-align: center;
-    }
-
-    .result a {
-      display: inline-block;
-      background: #007BFF;
-      color: white;
-      padding: 10px 20px;
-      border-radius: 8px;
-      text-decoration: none;
-      transition: background 0.3s;
-    }
-
-    .result a:hover {
-      background: #0056b3;
-    }
-  </style>
 </head>
 <body>
-  <h1>📄 ระบบแยกไฟล์ PDF ตามสินค้า</h1>
-<div >By. Dev:Boom</div>
-  <div class="upload-container">
-    <form id="upload-form" action="/upload" method="post" enctype="multipart/form-data">
-      <input type="file" name="pdf_files" accept=".pdf" required>
-      <button type="submit">เริ่มการทำงาน</button>
+  <div class="card">
+    <h1>แยก PDF ตาม Order ID และ SKU</h1>
+
+    <form id="upload-form">
+      <label class="file-label">
+        เลือกไฟล์ PDF
+        <input type="file" name="file" accept="application/pdf" required>
+      </label>
+      <div class="actions">
+        <button class="btn" type="submit">อัปโหลดและเริ่ม</button>
+      </div>
     </form>
 
-    <div class="progress-container">
-      <div class="progress-bar" id="progress-bar">0%</div>
-    </div>
+    <div class="status-panel" style="display:none;">
+      <div class="status-line">
+        <div class="status-text">สถานะ: <span id="status-text">Queued</span></div>
+        <div class="progress-wrap">
+          <div id="progress-bar" class="progress-bar"><div id="progress-fill" class="progress-fill" style="width:0%"></div></div>
+          <div id="progress-percent">0%</div>
+        </div>
+      </div>
 
-    <div class="status" id="status">รอเริ่มการทำงาน...</div>
+      <div id="message" class="message"></div>
+
+      <h3>ไฟล์ที่รวมเสร็จแล้ว</h3>
+      <ul id="file-list"></ul>
+
+      <div id="download-area" style="margin-top:12px;"></div>
+    </div>
   </div>
 
-  <div class="result" id="result"></div>
+<script>
+const form = document.getElementById('upload-form');
+const statusPanel = document.querySelector('.status-panel');
+const statusText = document.getElementById('status-text');
+const progressFill = document.getElementById('progress-fill');
+const progressPercent = document.getElementById('progress-percent');
+const messageDiv = document.getElementById('message');
+const fileList = document.getElementById('file-list');
+const downloadArea = document.getElementById('download-area');
 
-  <script>
-    const form = document.getElementById('upload-form');
-    const progressBar = document.getElementById('progress-bar');
-    const statusText = document.getElementById('status');
-    const resultDiv = document.getElementById('result');
+let pollInterval = null;
 
-    form.addEventListener('submit', function(e) {
-      e.preventDefault();
-      const formData = new FormData(form);
-      const xhr = new XMLHttpRequest();
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const files = form.querySelector('input[type=file]').files;
+  if (!files || files.length === 0) return alert('เลือกไฟล์ก่อน');
 
-      xhr.open('POST', '/upload', true);
+  const fd = new FormData();
+  fd.append('file', files[0]);
 
-      xhr.upload.onprogress = function(event) {
-        if (event.lengthComputable) {
-          const percent = Math.round((event.loaded / event.total) * 100);
-          progressBar.style.width = percent + '%';
-          progressBar.textContent = percent + '%';
-          statusText.textContent = 'กำลังอัปโหลด... ' + percent + '%';
-        }
-      };
+  // start upload
+  statusPanel.style.display = 'block';
+  statusText.textContent = 'กำลังอัปโหลด...';
+  messageDiv.textContent = '';
 
-      xhr.onload = function() {
-        if (xhr.status === 200) {
-          progressBar.style.width = '100%';
-          progressBar.textContent = '100%';
-          statusText.textContent = '✅ ประมวลผลสำเร็จ!';
-          resultDiv.innerHTML = xhr.responseText;
-        } else {
-          statusText.textContent = '❌ เกิดข้อผิดพลาด: ' + xhr.status;
-        }
-      };
+  const res = await fetch('/upload', { method: 'POST', body: fd });
+  if (!res.ok && res.status !== 202) {
+    const txt = await res.text();
+    statusText.textContent = 'Upload failed';
+    messageDiv.textContent = txt;
+    return;
+  }
+  const data = await res.json();
+  const jobId = data.job_id;
+  const statusUrl = data.status_url;
 
-      xhr.onerror = function() {
-        statusText.textContent = '❌ ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้';
-      };
+  statusText.textContent = 'Queued';
+  progressFill.style.width = '0%';
+  progressPercent.textContent = '0%';
+  fileList.innerHTML = '';
+  downloadArea.innerHTML = '';
 
-      xhr.send(formData);
-    });
-  </script>
+  // poll
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(async () => {
+    try {
+      const st = await fetch(statusUrl);
+      if (!st.ok) {
+        throw new Error('Status fetch failed');
+      }
+      const info = await st.json();
+      statusText.textContent = info.status;
+      const prog = info.progress || 0;
+      progressFill.style.width = prog + '%';
+      progressPercent.textContent = prog + '%';
+      messageDiv.textContent = info.message || '';
+
+      // update file list
+      fileList.innerHTML = '';
+      (info.files || []).forEach(f => {
+        const li = document.createElement('li');
+        li.textContent = f;
+        fileList.appendChild(li);
+      });
+
+      if (info.status === 'done' && info.zip) {
+        statusText.textContent = 'Completed';
+        clearInterval(pollInterval);
+        downloadArea.innerHTML = `<a class="btn" href="${info.zip}">ดาวน์โหลดทั้งหมด (ZIP)</a>`;
+      } else if (info.status === 'error') {
+        clearInterval(pollInterval);
+        messageDiv.textContent += '\\nมีข้อผิดพลาดในการประมวลผล';
+      }
+    } catch (err) {
+      console.error(err);
+      clearInterval(pollInterval);
+      statusText.textContent = 'Error';
+      messageDiv.textContent = 'ไม่สามารถดึงสถานะได้';
+    }
+  }, 1000);
+});
+</script>
 </body>
 </html>
