@@ -1,0 +1,41 @@
+body {
+  font-family: "Prompt", sans-serif;
+  background: #f7f9fc;
+  color: #333;
+  text-align: center;
+  padding: 20px;
+}
+
+.container {
+  background: white;
+  border-radius: 20px;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+  max-width: 500px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+h1 {
+  color: #2c3e50;
+}
+
+button, .download-btn {
+  background: #007bff;
+  color: white;
+  border: none;
+  padding: 10px 15px;
+  margin: 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: 0.2s;
+  text-decoration: none;
+}
+
+button:hover, .download-btn:hover {
+  background: #0056b3;
+}
+
+ul {
+  list-style: none;
+  padding: 0;
+}
