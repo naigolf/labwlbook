@@ -1,41 +1,14 @@
 <!DOCTYPE html>
-<html lang="th">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>PDF Splitter</title>
-  <link rel="stylesheet" href="/static/style.css">
+    <title>PDF Splitter</title>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <h2>อัปโหลดไฟล์ PDF เพื่อแยกหน้า</h2>
-  <form id="upload-form" action="/upload" method="post" enctype="multipart/form-data">
-    <input type="file" name="file" accept="application/pdf" required>
-    <button type="submit">เริ่มการทำงาน</button>
-  </form>
-
-  <div id="status"></div>
-  <div id="result"></div>
-
-  <script>
-    const form = document.getElementById("upload-form");
-    const statusDiv = document.getElementById("status");
-    const resultDiv = document.getElementById("result");
-
-    form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      statusDiv.innerHTML = "กำลังประมวลผล...";
-      resultDiv.innerHTML = "";
-
-      const formData = new FormData(form);
-      const res = await fetch("/upload", { method: "POST", body: formData });
-
-      if (res.ok) {
-        const data = await res.json();
-        statusDiv.innerHTML = "สำเร็จ! สามารถดาวน์โหลดได้ที่นี่:";
-        resultDiv.innerHTML = `<a href="${data.download_url}" class="btn">ดาวน์โหลดทั้งหมด (ZIP)</a>`;
-      } else {
-        statusDiv.innerHTML = "เกิดข้อผิดพลาดในการประมวลผล";
-      }
-    });
-  </script>
+    <h2>อัปโหลดไฟล์ PDF เพื่อแยกตาม Order ID / SKU</h2>
+    <form id="upload-form" action="/upload" method="post" enctype="multipart/form-data">
+        <input type="file" name="file" accept="application/pdf" required>
+        <button type="submit">เริ่มการทำงาน</button>
+    </form>
 </body>
 </html>
