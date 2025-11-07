@@ -5,18 +5,37 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>PDF Split by Order & SKU</title>
   <link rel="stylesheet" href="/static/style.css">
+  <style>
+    /* เพิ่มเฉพาะนี้ */
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 16px;
+    }
+    .actions {
+      display: flex;
+      justify-content: center;
+      margin-top: 10px;
+    }
+  </style>
 </head>
 <body>
   <div class="card">
-    <h1>แยก PDF ตาม Order ID และ SKU</h1>
-
+    <h1>ระบบแยกไฟล์ PDF ตามสินค้า</h1>
+<div>By. Dev:Boom</div>
     <form id="upload-form">
       <label class="file-label">
         เลือกไฟล์ PDF
         <input type="file" name="file" accept="application/pdf" required>
       </label>
       <div class="actions">
-        <button class="btn" type="submit">อัปโหลดและเริ่ม</button>
+        <button class="btn" type="submit">เริ่มการทำงาน</button>
       </div>
     </form>
 
@@ -58,7 +77,6 @@ form.addEventListener('submit', async (e) => {
   const fd = new FormData();
   fd.append('file', files[0]);
 
-  // start upload
   statusPanel.style.display = 'block';
   statusText.textContent = 'กำลังอัปโหลด...';
   messageDiv.textContent = '';
@@ -80,14 +98,11 @@ form.addEventListener('submit', async (e) => {
   fileList.innerHTML = '';
   downloadArea.innerHTML = '';
 
-  // poll
   if (pollInterval) clearInterval(pollInterval);
   pollInterval = setInterval(async () => {
     try {
       const st = await fetch(statusUrl);
-      if (!st.ok) {
-        throw new Error('Status fetch failed');
-      }
+      if (!st.ok) throw new Error('Status fetch failed');
       const info = await st.json();
       statusText.textContent = info.status;
       const prog = info.progress || 0;
@@ -95,7 +110,6 @@ form.addEventListener('submit', async (e) => {
       progressPercent.textContent = prog + '%';
       messageDiv.textContent = info.message || '';
 
-      // update file list
       fileList.innerHTML = '';
       (info.files || []).forEach(f => {
         const li = document.createElement('li');
@@ -109,7 +123,7 @@ form.addEventListener('submit', async (e) => {
         downloadArea.innerHTML = `<a class="btn" href="${info.zip}">ดาวน์โหลดทั้งหมด (ZIP)</a>`;
       } else if (info.status === 'error') {
         clearInterval(pollInterval);
-        messageDiv.textContent += '\\nมีข้อผิดพลาดในการประมวลผล';
+        messageDiv.textContent += '\nมีข้อผิดพลาดในการประมวลผล';
       }
     } catch (err) {
       console.error(err);
