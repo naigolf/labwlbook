@@ -213,5 +213,9 @@ def download_zip(filename):
     return send_file(os.path.join(ZIPPED_FOLDER, filename), as_attachment=True)
 
 # To run the app (only for development purposes, typically in a separate script or with 'flask run')
-# if __name__ == '__main__':
-#    app.run(debug=True, port=5000)
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
+
