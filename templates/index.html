@@ -1,50 +1,27 @@
 <!DOCTYPE html>
 <html lang="th">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LabWLBook - PDF Extractor</title>
-    <link rel="stylesheet" href="/static/style.css">
+  <meta charset="UTF-8">
+  <title>PDF Splitter</title>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div class="container">
-        <h1>📄 แปลง PDF เป็นข้อความ</h1>
+  <div class="container">
+    <h2>แยกไฟล์ PDF</h2>
+    <form id="uploadForm" method="post" enctype="multipart/form-data" action="/upload">
+      <input type="file" name="pdf_file" accept="application/pdf" required>
+      <button type="submit">เริ่มประมวลผล</button>
+    </form>
 
-        <form id="upload-form" action="/upload" method="post" enctype="multipart/form-data">
-            <input type="file" name="pdf_files" multiple required>
-            <button type="submit">📤 อัปโหลดไฟล์</button>
-        </form>
+    <p id="status"></p>
+  </div>
 
-        <button id="process-btn">⚙️ เริ่มการทำงาน</button>
-        <p id="status">🕓 รอเริ่มทำงาน...</p>
-
-        <h2>✅ ไฟล์ที่ประมวลผลเสร็จแล้ว</h2>
-        <ul id="file-list">
-            {% for file in processed_files %}
-            <li>{{ file }}</li>
-            {% endfor %}
-        </ul>
-
-        <a href="/download_all" class="download-btn">⬇️ ดาวน์โหลดทั้งหมด (.zip)</a>
-    </div>
-
-    <script>
-        document.getElementById("process-btn").addEventListener("click", async () => {
-            document.getElementById("status").textContent = "⚙️ กำลังประมวลผล...";
-            const res = await fetch("/process", { method: "POST" });
-            const data = await res.json();
-
-            if (data.status === "done") {
-                document.getElementById("status").textContent = "✅ เสร็จสิ้น!";
-                const list = document.getElementById("file-list");
-                list.innerHTML = "";
-                data.processed_files.forEach(f => {
-                    const li = document.createElement("li");
-                    li.textContent = f;
-                    list.appendChild(li);
-                });
-            }
-        });
-    </script>
+  <script>
+    const form = document.getElementById("uploadForm");
+    const statusText = document.getElementById("status");
+    form.addEventListener("submit", () => {
+      statusText.textContent = "กำลังประมวลผล...";
+    });
+  </script>
 </body>
 </html>
