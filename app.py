@@ -1,15 +1,12 @@
+from flask import Flask, render_template, request, send_file, redirect, url_for
 import os
 import zipfile
-from flask import Flask, render_template, request, send_file
 import pdfplumber
-from PyPDF2 import PdfWriter
-from werkzeug.utils import secure_filename
+from PyPDF2 import PdfWriter, PdfReader
 
 app = Flask(__name__)
-
 UPLOAD_FOLDER = "uploads"
 OUTPUT_FOLDER = "outputs"
-
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
@@ -19,34 +16,34 @@ def index():
 
 @app.route("/upload", methods=["POST"])
 def upload_file():
-    if "pdf_file" not in request.files:
-        return "No file part"
+    file = request.files["file"]
+    if not file:
+        return "No file uploaded", 400
 
-    file = request.files["pdf_file"]
-    if file.filename == "":
-        return "No selected file"
-
-    filename = secure_filename(file.filename)
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    filepath = os.path.join(UPLOAD_FOLDER, file.filename)
     file.save(filepath)
 
-    # เริ่มประมวลผล PDF
-    with pdfplumber.open(filepath) as pdf:
-        for i, page in enumerate(pdf.pages):
-            writer = PdfWriter()
-            writer.add_page(page.to_pdf().pages[0])  # ใช้ PyPDF2 เขียนออก
-            output_path = os.path.join(OUTPUT_FOLDER, f"page_{i+1}.pdf")
-            with open(output_path, "wb") as f_out:
-                writer.write(f_out)
+    # เปิดไฟล์ PDF
+    reader = PdfReader(filepath)
 
-    # รวมเป็น ZIP
-    zip_filename = "results.zip"
-    zip_path = os.path.join(OUTPUT_FOLDER, zip_filename)
+    for i, page in enumerate(reader.pages):
+        writer = PdfWriter()
+        writer.add_page(page)
+
+        # สร้างชื่อไฟล์ใหม่แต่ละหน้า
+        output_path = os.path.join(OUTPUT_FOLDER, f"{os.path.splitext(file.filename)[0]}_page_{i+1}.pdf")
+        with open(output_path, "wb") as f:
+            writer.write(f)
+
+    return redirect(url_for("download_all"))
+
+@app.route("/download_all")
+def download_all():
+    zip_path = os.path.join(OUTPUT_FOLDER, "all_results.zip")
     with zipfile.ZipFile(zip_path, "w") as zipf:
-        for file_name in os.listdir(OUTPUT_FOLDER):
-            if file_name.endswith(".pdf"):
-                zipf.write(os.path.join(OUTPUT_FOLDER, file_name), file_name)
-
+        for file in os.listdir(OUTPUT_FOLDER):
+            if file.endswith(".pdf"):
+                zipf.write(os.path.join(OUTPUT_FOLDER, file), arcname=file)
     return send_file(zip_path, as_attachment=True)
 
 if __name__ == "__main__":
