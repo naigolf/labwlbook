@@ -1,27 +1,17 @@
 <!DOCTYPE html>
-<html lang="th">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>PDF Splitter</title>
-  <link rel="stylesheet" href="/static/style.css">
+    <title>PDF Splitter</title>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <div class="container">
-    <h2>แยกไฟล์ PDF</h2>
-    <form id="uploadForm" method="post" enctype="multipart/form-data" action="/upload">
-      <input type="file" name="pdf_file" accept="application/pdf" required>
-      <button type="submit">เริ่มประมวลผล</button>
+    <h2>อัปโหลดไฟล์ PDF</h2>
+    <form id="upload-form" action="/upload" method="post" enctype="multipart/form-data">
+        <input type="file" name="file" accept="application/pdf" required>
+        <button type="submit">เริ่มการทำงาน</button>
     </form>
 
-    <p id="status"></p>
-  </div>
-
-  <script>
-    const form = document.getElementById("uploadForm");
-    const statusText = document.getElementById("status");
-    form.addEventListener("submit", () => {
-      statusText.textContent = "กำลังประมวลผล...";
-    });
-  </script>
+    <div id="status"></div>
+    <div id="result"></div>
 </body>
 </html>
