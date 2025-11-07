@@ -1,20 +1,14 @@
 <!DOCTYPE html>
-<html>
+<html lang="th">
 <head>
-  <meta charset="utf-8">
-  <title>PDF Splitter by Order ID + SKU</title>
-  <style>
-    body { font-family: Arial; padding: 40px; text-align: center; }
-    input[type=file] { margin: 20px; }
-    button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
-  </style>
+    <meta charset="UTF-8">
+    <title>PDF Split & Group by SKU</title>
 </head>
 <body>
-  <h1>อัปโหลดไฟล์ PDF เดียว</h1>
-  <form action="/upload" method="post" enctype="multipart/form-data">
-    <input type="file" name="file" accept="application/pdf" required>
-    <br>
-    <button type="submit">เริ่มแยกไฟล์</button>
-  </form>
+    <h2>อัปโหลดไฟล์ PDF เดียว</h2>
+    <form action="/upload" method="post" enctype="multipart/form-data">
+        <input type="file" name="pdf_files" accept="application/pdf" multiple required>
+        <button type="submit">อัปโหลดและประมวลผล</button>
+    </form>
 </body>
 </html>
