@@ -153,3 +153,11 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
         jobs[job_id]["traceback"] = traceback.format_exc()
         print(f"[{job_id}] ❌ Fatal error:", e)
         print(traceback.format_exc())
+
+
+if __name__ == '__main__':
+    import os
+    port = int(os.environ.get('PORT', 10000))  # Render จะส่ง PORT มาให้ตอนรัน
+    app.run(host='0.0.0.0', port=port)
+
+
