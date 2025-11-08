@@ -53,7 +53,7 @@ def create_zip_background(job_id, consolidated_files, job_consolidated, job_zipp
         print(traceback.format_exc())
 
 #
-# ⬇️ --- แก้ไขฟังก์ชันนี้อีกครั้ง (รอบนี้ถูกต้องครับ) --- ⬇️
+# ⬇️ --- แก้ไขฟังก์ชันนี้ (เน้นที่ Pass 3) --- ⬇️
 #
 def process_pdf_job(job_id, uploaded_path, original_filename):
     """Main processing job (splitting, grouping, merging)."""
@@ -70,12 +70,10 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
 
         # --- Pass 1: Map pages to groups (Memory Efficient) ---
         jobs[job_id]["message"] = "Analyzing pages..."
-        
         page_groups = {} 
         last_order_id, last_sku = None, None
         total_pages = 0
 
-        # pdfplumber ใช้ 'with' ได้ ถูกต้องแล้ว
         with pdfplumber.open(uploaded_path) as pdf:
             total_pages = len(pdf.pages) if pdf.pages else 0
             if total_pages == 0:
@@ -84,13 +82,9 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
             for i, page in enumerate(pdf.pages):
                 text = page.extract_text() or ""
                 lines = text.splitlines()
-                
                 order_id = extract_order_id(text)
-                if order_id:
-                    last_order_id = order_id
-                else:
-                    order_id = last_order_id
-
+                if order_id: last_order_id = order_id
+                else: order_id = last_order_id
                 barcode = extract_barcode(text)
                 sku = None
                 if barcode is None and last_sku is not None:
@@ -100,36 +94,25 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
                         if "Product Name" in line and "Seller SKU" in line:
                             if idx + 1 < len(lines):
                                 parts = lines[idx + 1].split()
-                                if len(parts) >= 2:
-                                    sku = parts[-2]
+                                if len(parts) >= 2: sku = parts[-2]
                             break
-
-                if not sku:
-                    sku = last_sku if last_sku else f"UNKNOWN_{i}"
-
+                if not sku: sku = last_sku if last_sku else f"UNKNOWN_{i}"
                 sku = sku.replace("/", "_").replace("\\", "_").strip()
                 last_sku = sku
-
                 if order_id and sku:
                     group_key = f"{order_id}_{sku}"
-                    page_groups.setdefault(group_key, []).append(i) # Add page index
+                    page_groups.setdefault(group_key, []).append(i)
                 else:
                     print(f"Warning: missing order_id or sku on page {i}")
-
                 if total_pages > 0:
                     jobs[job_id]["progress"] = int((i + 1) / total_pages * 50) 
 
         # --- Pass 2: Save sorted files (Memory Efficient) ---
         jobs[job_id]["message"] = "Splitting files..."
-        
-        # *** แก้ไขจุดที่ 1 ***
-        # เราต้องเปิดไฟล์ (f) และส่ง file object (f) ให้ PdfReader
-        # แล้วเราต้อง .close() ตัว file (f)
         f_main = None
         try:
-            f_main = open(uploaded_path, 'rb') # 'rb' = read binary
+            f_main = open(uploaded_path, 'rb')
             reader = PdfReader(f_main)
-            
             for group_key, page_indices in page_groups.items():
                 writer = PdfWriter() 
                 for page_index in page_indices:
@@ -137,17 +120,15 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
                         writer.add_page(reader.pages[page_index])
                     except Exception as e:
                         print(f"Error adding page {page_index} to {group_key}: {e}")
-                
                 out_path = os.path.join(job_sorted, f"{group_key}.pdf")
                 with open(out_path, "wb") as f_out:
                     writer.write(f_out)
         finally:
-            if f_main:
-                f_main.close() # ปิด file object หลัก
+            if f_main: f_main.close()
         
         jobs[job_id]["progress"] = 70 
 
-        # --- Pass 3: Consolidate (Fixing file handle leaks) ---
+        # --- Pass 3: Consolidate (Memory Efficient Fix) ---
         jobs[job_id]["message"] = "Mapping primary SKUs..."
         order_id_to_primary_sku = {}
         for filename in os.listdir(job_sorted):
@@ -171,13 +152,18 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
                     if primary_sku:
                         grouped_files_by_primary_sku.setdefault(primary_sku, []).append((order_id, file_path))
 
-        sku_writers = {}
+        # *** นี่คือการแก้ไข ***
+        # เราจะไม่ใช้ 'sku_writers' dictionary อีกต่อไป
+        # เราจะเขียนไฟล์ทันทีใน loop
+        
+        consolidated_files = [] # สร้าง list นี้เลย
+        total_skus = len(grouped_files_by_primary_sku)
+        processed_skus = 0
+        
         for primary_sku, files_list in grouped_files_by_primary_sku.items():
             files_list.sort(key=lambda x: x[0])
-            writer = PdfWriter()
+            writer = PdfWriter() # สร้าง writer
             for order_id, file_path in files_list:
-                # *** แก้ไขจุดที่ 2 ***
-                # ทำเหมือนเดิม: เปิด file object (f_inner) และส่งให้ Reader
                 f_inner = None 
                 try:
                     f_inner = open(file_path, 'rb')
@@ -187,22 +173,23 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
                 except Exception as e:
                     print(f"Error merging {file_path}: {e}")
                 finally:
-                    if f_inner:
-                        f_inner.close() # ปิด file object ย่อย
+                    if f_inner: f_inner.close() 
                         
             if len(writer.pages) > 0:
-                sku_writers[primary_sku] = writer
+                # *** เขียนไฟล์ลง Disk ทันที ***
+                out_file = os.path.join(job_consolidated, f"{primary_sku}.pdf")
+                with open(out_file, "wb") as f_out_consolidated:
+                    writer.write(f_out_consolidated)
+                consolidated_files.append(f"{primary_sku}.pdf") # เก็บแค่ชื่อไฟล์
 
-        jobs[job_id]["progress"] = 85 
-
-        jobs[job_id]["message"] = "Saving consolidated PDFs..."
-        consolidated_files = []
-        for primary_sku, writer in sku_writers.items():
-            out_file = os.path.join(job_consolidated, f"{primary_sku}.pdf")
-            with open(out_file, "wb") as f:
-                writer.write(f)
-            consolidated_files.append(f"{primary_sku}.pdf")
-
+            # อัปเดต progress ระหว่างทาง (70% -> 90%)
+            processed_skus += 1
+            if total_skus > 0:
+                jobs[job_id]["progress"] = 70 + int((processed_skus / total_skus) * 20)
+        
+        # จบ loop Pass 3 โดยใช้ RAM คงที่
+        # ไม่ต้องมี Loop ที่สองสำหรับ Save อีกต่อไป
+        
         jobs[job_id]["files"] = consolidated_files
         jobs[job_id]["progress"] = 90
         jobs[job_id]["message"] = "Finalizing (zipping)..."
