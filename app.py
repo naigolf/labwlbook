@@ -1,64 +1,10 @@
-from flask import Flask, render_template, request, send_file, jsonify, url_for
-import os, re, zipfile, pdfplumber, threading, uuid, traceback, time
-from PyPDF2 import PdfWriter, PdfReader
-from werkzeug.utils import secure_filename
-
-app = Flask(__name__)
-
-BASE_UPLOAD = "uploads"
-BASE_SORTED = "sorted"
-BASE_CONSOLIDATED = "consolidated_by_sku"
-BASE_ZIPPED = "zipped_archives"
-
-for d in [BASE_UPLOAD, BASE_SORTED, BASE_CONSOLIDATED, BASE_ZIPPED]:
-    os.makedirs(d, exist_ok=True)
-
-jobs = {}
-
-
-# ---------- helper functions ----------
-def extract_order_id(text):
-    m = re.search(r"Order ID[: ]+(\d+)", text)
-    return m.group(1) if m else None
-
-def extract_barcode(text):
-    m = re.search(r"\b\d{10,18}\b", text)
-    return m.group(0) if m else None
-
-
-def create_zip_background(job_id, consolidated_files, job_consolidated, job_zipped):
-    """Runs in background to create zip and finalize job."""
-    try:
-        jobs[job_id]["message"] = "Creating ZIP archive..."
-        zip_name = f"results_{job_id}.zip"
-        zip_path = os.path.join(job_zipped, zip_name)
-
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for f in consolidated_files:
-                p = os.path.join(job_consolidated, f)
-                if os.path.exists(p):
-                    zipf.write(p, arcname=f)
-
-        jobs[job_id]["zip"] = zip_path
-        jobs[job_id]["progress"] = 100
-        jobs[job_id]["status"] = "done"
-        jobs[job_id]["message"] = "Completed ✅"
-        print(f"[{job_id}] ✅ ZIP created successfully at {zip_path}")
-
-    except Exception as e:
-        jobs[job_id]["status"] = "error"
-        jobs[job_id]["message"] = f"Error creating zip: {e}"
-        jobs[job_id]["traceback"] = traceback.format_exc()
-        print(f"[{job_id}] ❌ ZIP creation failed:", e)
-        print(traceback.format_exc())
-
-
 def process_pdf_job(job_id, uploaded_path, original_filename):
     """Main processing job (splitting, grouping, merging)."""
     try:
         jobs[job_id]["status"] = "running"
         jobs[job_id]["progress"] = 0
         jobs[job_id]["message"] = "Preparing..."
+        print(f"[{job_id}] 🟡 Starting process for {original_filename}")
 
         job_sorted = os.path.join(BASE_SORTED, job_id)
         job_consolidated = os.path.join(BASE_CONSOLIDATED, job_id)
@@ -69,6 +15,7 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
         # count pages
         with pdfplumber.open(uploaded_path) as pdf_for_count:
             total_pages = len(pdf_for_count.pages) if pdf_for_count.pages else 0
+        print(f"[{job_id}] Total pages: {total_pages}")
 
         jobs[job_id]["message"] = "Splitting pages..."
         reader = PdfReader(uploaded_path)
@@ -78,54 +25,64 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
 
         with pdfplumber.open(uploaded_path) as pdf:
             for i, page in enumerate(pdf.pages):
-                text = page.extract_text() or ""
-                lines = text.splitlines()
-                order_id = extract_order_id(text)
-                if order_id:
-                    last_order_id = order_id
-                else:
-                    order_id = last_order_id
+                try:
+                    text = page.extract_text() or ""
+                    lines = text.splitlines()
+                    order_id = extract_order_id(text)
+                    if order_id:
+                        last_order_id = order_id
+                    else:
+                        order_id = last_order_id
 
-                barcode = extract_barcode(text)
-                sku = None
-                if barcode is None and last_sku is not None:
-                    sku = last_sku
-                else:
-                    for idx, line in enumerate(lines):
-                        if "Product Name" in line and "Seller SKU" in line:
-                            if idx + 1 < len(lines):
-                                parts = lines[idx + 1].split()
-                                if len(parts) >= 2:
-                                    sku = parts[-2]
-                            break
+                    barcode = extract_barcode(text)
+                    sku = None
+                    if barcode is None and last_sku is not None:
+                        sku = last_sku
+                    else:
+                        for idx, line in enumerate(lines):
+                            if "Product Name" in line and "Seller SKU" in line:
+                                if idx + 1 < len(lines):
+                                    parts = lines[idx + 1].split()
+                                    if len(parts) >= 2:
+                                        sku = parts[-2]
+                                break
 
-                if not sku:
-                    sku = last_sku if last_sku else f"UNKNOWN_{i}"
+                    if not sku:
+                        sku = last_sku if last_sku else f"UNKNOWN_{i}"
 
-                sku = sku.replace("/", "_").replace("\\", "_").strip()
-                last_sku = sku
+                    sku = sku.replace("/", "_").replace("\\", "_").strip()
+                    last_sku = sku
 
-                if order_id and sku:
-                    group_key = f"{order_id}_{sku}"
-                    if group_key not in writers:
-                        writers[group_key] = PdfWriter()
-                    try:
-                        writers[group_key].add_page(reader.pages[i])
-                    except Exception as e:
-                        print(f"Error adding page {i}: {e}")
-                else:
-                    print(f"Warning: missing order_id or sku on page {i}")
+                    if order_id and sku:
+                        group_key = f"{order_id}_{sku}"
+                        if group_key not in writers:
+                            writers[group_key] = PdfWriter()
+                        try:
+                            writers[group_key].add_page(reader.pages[i])
+                        except Exception as e:
+                            print(f"[{job_id}] ⚠️ Error adding page {i}: {e}")
+                    else:
+                        print(f"[{job_id}] ⚠️ Missing order_id or sku on page {i}")
 
-                processed_pages += 1
-                if total_pages > 0:
-                    jobs[job_id]["progress"] = int(processed_pages / total_pages * 70)  # 0-70% for splitting
+                    processed_pages += 1
+                    if total_pages > 0:
+                        jobs[job_id]["progress"] = int(processed_pages / total_pages * 70)
+                except Exception as e:
+                    print(f"[{job_id}] ❌ Error processing page {i}: {e}")
+
+        print(f"[{job_id}] ✅ Split complete ({len(writers)} groups)")
 
         # save sorted
         jobs[job_id]["message"] = "Saving sorted PDFs..."
         for group_key, writer in writers.items():
-            out_path = os.path.join(job_sorted, f"{group_key}.pdf")
-            with open(out_path, "wb") as f:
-                writer.write(f)
+            try:
+                out_path = os.path.join(job_sorted, f"{group_key}.pdf")
+                with open(out_path, "wb") as f:
+                    writer.write(f)
+            except Exception as e:
+                print(f"[{job_id}] ❌ Error saving sorted {group_key}: {e}")
+
+        print(f"[{job_id}] ✅ Sorted PDFs saved")
 
         # map primary SKUs
         jobs[job_id]["message"] = "Mapping primary SKUs..."
@@ -139,7 +96,7 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
                     if order_id not in order_id_to_primary_sku:
                         order_id_to_primary_sku[order_id] = sku
 
-        # consolidate by primary sku
+        # consolidate
         jobs[job_id]["message"] = "Consolidating by primary SKU..."
         grouped_files_by_primary_sku = {}
         for filename in os.listdir(job_sorted):
@@ -162,23 +119,28 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
                     for p in r.pages:
                         writer.add_page(p)
                 except Exception as e:
-                    print(f"Error merging {file_path}: {e}")
+                    print(f"[{job_id}] ⚠️ Error merging {file_path}: {e}")
             if len(writer.pages) > 0:
                 sku_writers[primary_sku] = writer
+
+        print(f"[{job_id}] ✅ Consolidation complete ({len(sku_writers)} SKUs)")
 
         jobs[job_id]["message"] = "Saving consolidated PDFs..."
         consolidated_files = []
         for primary_sku, writer in sku_writers.items():
-            out_file = os.path.join(job_consolidated, f"{primary_sku}.pdf")
-            with open(out_file, "wb") as f:
-                writer.write(f)
-            consolidated_files.append(f"{primary_sku}.pdf")
+            try:
+                out_file = os.path.join(job_consolidated, f"{primary_sku}.pdf")
+                with open(out_file, "wb") as f:
+                    writer.write(f)
+                consolidated_files.append(f"{primary_sku}.pdf")
+            except Exception as e:
+                print(f"[{job_id}] ❌ Error saving consolidated {primary_sku}: {e}")
 
         jobs[job_id]["files"] = consolidated_files
         jobs[job_id]["progress"] = 90
         jobs[job_id]["message"] = "Finalizing (zipping)..."
 
-        # Run ZIP creation in background
+        print(f"[{job_id}] ⏳ Starting ZIP background thread ({len(consolidated_files)} files)...")
         threading.Thread(
             target=create_zip_background,
             args=(job_id, consolidated_files, job_consolidated, job_zipped),
@@ -189,65 +151,5 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
         jobs[job_id]["status"] = "error"
         jobs[job_id]["message"] = f"Error: {str(e)}"
         jobs[job_id]["traceback"] = traceback.format_exc()
-        print("Error in process_pdf_job:", e)
+        print(f"[{job_id}] ❌ Fatal error:", e)
         print(traceback.format_exc())
-
-
-# ---------- Flask routes ----------
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-
-@app.route("/upload", methods=["POST"])
-def upload():
-    if "file" in request.files:
-        file = request.files["file"]
-    else:
-        return "No file", 400
-
-    if file.filename == "":
-        return "No filename", 400
-
-    filename = secure_filename(file.filename)
-    saved_path = os.path.join(BASE_UPLOAD, filename)
-    file.save(saved_path)
-
-    job_id = uuid.uuid4().hex
-    jobs[job_id] = {"status": "pending", "progress": 0, "message": "Queued", "files": [], "zip": None}
-
-    threading.Thread(target=process_pdf_job, args=(job_id, saved_path, filename), daemon=True).start()
-
-    return jsonify({"job_id": job_id, "status_url": url_for("job_status", job_id=job_id)}), 202
-
-
-@app.route("/status/<job_id>")
-def job_status(job_id):
-    info = jobs.get(job_id)
-    if not info:
-        return jsonify({"error": "no such job"}), 404
-    result = {
-        "status": info["status"],
-        "progress": info.get("progress", 0),
-        "message": info.get("message", ""),
-        "files": info.get("files", []),
-        "zip": None
-    }
-    if info.get("zip"):
-        result["zip"] = url_for("download_job_zip", job_id=job_id)
-    if info.get("status") == "error":
-        result["traceback"] = info.get("traceback")
-    return jsonify(result)
-
-
-@app.route("/download/<job_id>")
-def download_job_zip(job_id):
-    info = jobs.get(job_id)
-    if not info or not info.get("zip"):
-        return "No such job or zip not ready", 404
-    return send_file(info["zip"], as_attachment=True)
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
