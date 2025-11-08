@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, send_file, jsonify, url_for
-import os, re, zipfile, pdfplumber, threading, uuid, traceback, time
+import os, re, zipfile, pdfplumber, threading, uuid, traceback, time, gc
 from PyPDF2 import PdfWriter, PdfReader
 from werkzeug.utils import secure_filename
 
@@ -14,7 +14,6 @@ for d in [BASE_UPLOAD, BASE_SORTED, BASE_CONSOLIDATED, BASE_ZIPPED]:
     os.makedirs(d, exist_ok=True)
 
 jobs = {}
-
 
 # ---------- helper functions ----------
 def extract_order_id(text):
@@ -52,11 +51,12 @@ def create_zip_background(job_id, consolidated_files, job_consolidated, job_zipp
         print(f"[{job_id}] ❌ ZIP creation failed:", e)
         print(traceback.format_exc())
 
-#
-# ⬇️ --- แก้ไขฟังก์ชันนี้ (เน้นที่ Pass 3) --- ⬇️
-#
+
 def process_pdf_job(job_id, uploaded_path, original_filename):
-    """Main processing job (splitting, grouping, merging)."""
+    """Main processing job (splitting, grouping, merging) - OPTIMIZED VERSION."""
+    pdf_plumber = None
+    reader = None
+    
     try:
         jobs[job_id]["status"] = "running"
         jobs[job_id]["progress"] = 0
@@ -68,23 +68,39 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
         for d in [job_sorted, job_consolidated, job_zipped]:
             os.makedirs(d, exist_ok=True)
 
-        # --- Pass 1: Map pages to groups (Memory Efficient) ---
-        jobs[job_id]["message"] = "Analyzing pages..."
-        page_groups = {} 
+        # Count pages - close immediately after
+        jobs[job_id]["message"] = "Counting pages..."
+        with pdfplumber.open(uploaded_path) as pdf_counter:
+            total_pages = len(pdf_counter.pages) if pdf_counter.pages else 0
+        
+        print(f"[{job_id}] Total pages: {total_pages}")
+
+        # Open PDF once for reading
+        jobs[job_id]["message"] = "Loading PDF..."
+        reader = PdfReader(uploaded_path)
+        pdf_plumber = pdfplumber.open(uploaded_path)
+        
+        # Track page info without keeping writers in memory
+        page_info = []
         last_order_id, last_sku = None, None
-        total_pages = 0
-
-        with pdfplumber.open(uploaded_path) as pdf:
-            total_pages = len(pdf.pages) if pdf.pages else 0
-            if total_pages == 0:
-                raise Exception("PDF file is empty or corrupted.")
-
-            for i, page in enumerate(pdf.pages):
+        
+        jobs[job_id]["message"] = "Analyzing pages..."
+        
+        for i in range(total_pages):
+            try:
+                # Extract text using pdfplumber
+                page = pdf_plumber.pages[i]
                 text = page.extract_text() or ""
                 lines = text.splitlines()
+                
+                # Extract order ID
                 order_id = extract_order_id(text)
-                if order_id: last_order_id = order_id
-                else: order_id = last_order_id
+                if order_id:
+                    last_order_id = order_id
+                else:
+                    order_id = last_order_id
+
+                # Extract SKU
                 barcode = extract_barcode(text)
                 sku = None
                 if barcode is None and last_sku is not None:
@@ -94,42 +110,78 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
                         if "Product Name" in line and "Seller SKU" in line:
                             if idx + 1 < len(lines):
                                 parts = lines[idx + 1].split()
-                                if len(parts) >= 2: sku = parts[-2]
+                                if len(parts) >= 2:
+                                    sku = parts[-2]
                             break
-                if not sku: sku = last_sku if last_sku else f"UNKNOWN_{i}"
+
+                if not sku:
+                    sku = last_sku if last_sku else f"UNKNOWN_{i}"
+
                 sku = sku.replace("/", "_").replace("\\", "_").strip()
                 last_sku = sku
+
                 if order_id and sku:
                     group_key = f"{order_id}_{sku}"
-                    page_groups.setdefault(group_key, []).append(i)
+                    page_info.append((i, group_key))
                 else:
                     print(f"Warning: missing order_id or sku on page {i}")
-                if total_pages > 0:
-                    jobs[job_id]["progress"] = int((i + 1) / total_pages * 50) 
 
-        # --- Pass 2: Save sorted files (Memory Efficient) ---
-        jobs[job_id]["message"] = "Splitting files..."
-        f_main = None
-        try:
-            f_main = open(uploaded_path, 'rb')
-            reader = PdfReader(f_main)
-            for group_key, page_indices in page_groups.items():
-                writer = PdfWriter() 
-                for page_index in page_indices:
-                    try:
-                        writer.add_page(reader.pages[page_index])
-                    except Exception as e:
-                        print(f"Error adding page {page_index} to {group_key}: {e}")
-                out_path = os.path.join(job_sorted, f"{group_key}.pdf")
-                with open(out_path, "wb") as f_out:
-                    writer.write(f_out)
-        finally:
-            if f_main: f_main.close()
+                # Update progress (0-50% for analysis)
+                if i % 10 == 0 or i == total_pages - 1:
+                    progress = int((i + 1) / total_pages * 50)
+                    jobs[job_id]["progress"] = progress
+                    jobs[job_id]["message"] = f"Analyzing pages... ({i+1}/{total_pages})"
+                    
+            except Exception as e:
+                print(f"Error analyzing page {i}: {e}")
+                continue
+
+        # Close pdfplumber to free memory
+        pdf_plumber.close()
+        pdf_plumber = None
         
-        jobs[job_id]["progress"] = 70 
+        # Group pages by key
+        jobs[job_id]["message"] = "Grouping pages..."
+        grouped_pages = {}
+        for page_num, group_key in page_info:
+            if group_key not in grouped_pages:
+                grouped_pages[group_key] = []
+            grouped_pages[group_key].append(page_num)
 
-        # --- Pass 3: Consolidate (Memory Efficient Fix) ---
+        # Write sorted PDFs in batches to avoid memory issues
+        jobs[job_id]["message"] = "Saving sorted PDFs..."
+        total_groups = len(grouped_pages)
+        
+        for idx, (group_key, page_nums) in enumerate(grouped_pages.items()):
+            writer = PdfWriter()
+            try:
+                for page_num in page_nums:
+                    writer.add_page(reader.pages[page_num])
+                
+                out_path = os.path.join(job_sorted, f"{group_key}.pdf")
+                with open(out_path, "wb") as f:
+                    writer.write(f)
+                    
+            except Exception as e:
+                print(f"Error writing group {group_key}: {e}")
+            finally:
+                # Clear writer to free memory
+                del writer
+                
+            # Update progress (50-70% for writing)
+            if idx % 5 == 0 or idx == total_groups - 1:
+                progress = 50 + int((idx + 1) / total_groups * 20)
+                jobs[job_id]["progress"] = progress
+                jobs[job_id]["message"] = f"Saving sorted PDFs... ({idx+1}/{total_groups})"
+
+        # Close reader and force garbage collection
+        reader = None
+        gc.collect()
+
+        # Map primary SKUs
         jobs[job_id]["message"] = "Mapping primary SKUs..."
+        jobs[job_id]["progress"] = 70
+        
         order_id_to_primary_sku = {}
         for filename in os.listdir(job_sorted):
             if filename.endswith(".pdf"):
@@ -140,7 +192,10 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
                     if order_id not in order_id_to_primary_sku:
                         order_id_to_primary_sku[order_id] = sku
 
+        # Consolidate by primary sku
         jobs[job_id]["message"] = "Consolidating by primary SKU..."
+        jobs[job_id]["progress"] = 75
+        
         grouped_files_by_primary_sku = {}
         for filename in os.listdir(job_sorted):
             if filename.endswith(".pdf"):
@@ -152,48 +207,47 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
                     if primary_sku:
                         grouped_files_by_primary_sku.setdefault(primary_sku, []).append((order_id, file_path))
 
-        # *** นี่คือการแก้ไข ***
-        # เราจะไม่ใช้ 'sku_writers' dictionary อีกต่อไป
-        # เราจะเขียนไฟล์ทันทีใน loop
-        
-        consolidated_files = [] # สร้าง list นี้เลย
+        # Write consolidated PDFs one at a time
+        jobs[job_id]["message"] = "Saving consolidated PDFs..."
+        consolidated_files = []
         total_skus = len(grouped_files_by_primary_sku)
-        processed_skus = 0
         
-        for primary_sku, files_list in grouped_files_by_primary_sku.items():
+        for sku_idx, (primary_sku, files_list) in enumerate(grouped_files_by_primary_sku.items()):
             files_list.sort(key=lambda x: x[0])
-            writer = PdfWriter() # สร้าง writer
-            for order_id, file_path in files_list:
-                f_inner = None 
-                try:
-                    f_inner = open(file_path, 'rb')
-                    r = PdfReader(f_inner)
-                    for p in r.pages:
-                        writer.add_page(p)
-                except Exception as e:
-                    print(f"Error merging {file_path}: {e}")
-                finally:
-                    if f_inner: f_inner.close() 
-                        
-            if len(writer.pages) > 0:
-                # *** เขียนไฟล์ลง Disk ทันที ***
-                out_file = os.path.join(job_consolidated, f"{primary_sku}.pdf")
-                with open(out_file, "wb") as f_out_consolidated:
-                    writer.write(f_out_consolidated)
-                consolidated_files.append(f"{primary_sku}.pdf") # เก็บแค่ชื่อไฟล์
+            writer = PdfWriter()
+            
+            try:
+                for order_id, file_path in files_list:
+                    try:
+                        r = PdfReader(file_path)
+                        for p in r.pages:
+                            writer.add_page(p)
+                    except Exception as e:
+                        print(f"Error merging {file_path}: {e}")
+                
+                if len(writer.pages) > 0:
+                    out_file = os.path.join(job_consolidated, f"{primary_sku}.pdf")
+                    with open(out_file, "wb") as f:
+                        writer.write(f)
+                    consolidated_files.append(f"{primary_sku}.pdf")
+                    
+            except Exception as e:
+                print(f"Error consolidating SKU {primary_sku}: {e}")
+            finally:
+                del writer
+                gc.collect()
+            
+            # Update progress (75-90% for consolidation)
+            if sku_idx % 2 == 0 or sku_idx == total_skus - 1:
+                progress = 75 + int((sku_idx + 1) / total_skus * 15)
+                jobs[job_id]["progress"] = progress
+                jobs[job_id]["message"] = f"Saving consolidated PDFs... ({sku_idx+1}/{total_skus})"
 
-            # อัปเดต progress ระหว่างทาง (70% -> 90%)
-            processed_skus += 1
-            if total_skus > 0:
-                jobs[job_id]["progress"] = 70 + int((processed_skus / total_skus) * 20)
-        
-        # จบ loop Pass 3 โดยใช้ RAM คงที่
-        # ไม่ต้องมี Loop ที่สองสำหรับ Save อีกต่อไป
-        
         jobs[job_id]["files"] = consolidated_files
         jobs[job_id]["progress"] = 90
         jobs[job_id]["message"] = "Finalizing (zipping)..."
 
+        # Run ZIP creation in background
         threading.Thread(
             target=create_zip_background,
             args=(job_id, consolidated_files, job_consolidated, job_zipped),
@@ -204,11 +258,19 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
         jobs[job_id]["status"] = "error"
         jobs[job_id]["message"] = f"Error: {str(e)}"
         jobs[job_id]["traceback"] = traceback.format_exc()
-        print("Error in process_pdf_job:", e)
+        print(f"[{job_id}] Error in process_pdf_job:", e)
         print(traceback.format_exc())
-#
-# ⬆️ --- สิ้นสุดฟังก์ชันที่แก้ไข --- ⬆️
-#
+    
+    finally:
+        # Clean up resources
+        if pdf_plumber:
+            try:
+                pdf_plumber.close()
+            except:
+                pass
+        reader = None
+        gc.collect()
+
 
 # ---------- Flask routes ----------
 @app.route("/")
