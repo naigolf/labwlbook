@@ -53,7 +53,7 @@ def create_zip_background(job_id, consolidated_files, job_consolidated, job_zipp
         print(traceback.format_exc())
 
 #
-# ⬇️ --- แก้ไขฟังก์ชันนี้อีกครั้งครับ --- ⬇️
+# ⬇️ --- แก้ไขฟังก์ชันนี้อีกครั้ง (รอบนี้ถูกต้องครับ) --- ⬇️
 #
 def process_pdf_job(job_id, uploaded_path, original_filename):
     """Main processing job (splitting, grouping, merging)."""
@@ -75,7 +75,7 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
         last_order_id, last_sku = None, None
         total_pages = 0
 
-        # *** จุดนี้ถูกต้อง *** 'pdfplumber' ใช้ 'with' ได้
+        # pdfplumber ใช้ 'with' ได้ ถูกต้องแล้ว
         with pdfplumber.open(uploaded_path) as pdf:
             total_pages = len(pdf.pages) if pdf.pages else 0
             if total_pages == 0:
@@ -123,9 +123,13 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
         jobs[job_id]["message"] = "Splitting files..."
         
         # *** แก้ไขจุดที่ 1 ***
-        # 'PdfReader' ใช้ 'with' ไม่ได้ ให้เปิดธรรมดา
-        reader = PdfReader(uploaded_path)
+        # เราต้องเปิดไฟล์ (f) และส่ง file object (f) ให้ PdfReader
+        # แล้วเราต้อง .close() ตัว file (f)
+        f_main = None
         try:
+            f_main = open(uploaded_path, 'rb') # 'rb' = read binary
+            reader = PdfReader(f_main)
+            
             for group_key, page_indices in page_groups.items():
                 writer = PdfWriter() 
                 for page_index in page_indices:
@@ -135,10 +139,11 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
                         print(f"Error adding page {page_index} to {group_key}: {e}")
                 
                 out_path = os.path.join(job_sorted, f"{group_key}.pdf")
-                with open(out_path, "wb") as f:
-                    writer.write(f)
+                with open(out_path, "wb") as f_out:
+                    writer.write(f_out)
         finally:
-            reader.close() # และสั่ง .close() เองตอนจบ
+            if f_main:
+                f_main.close() # ปิด file object หลัก
         
         jobs[job_id]["progress"] = 70 
 
@@ -172,17 +177,18 @@ def process_pdf_job(job_id, uploaded_path, original_filename):
             writer = PdfWriter()
             for order_id, file_path in files_list:
                 # *** แก้ไขจุดที่ 2 ***
-                # ใช้ try...finally เพื่อให้แน่ใจว่า .close()
-                r = None 
+                # ทำเหมือนเดิม: เปิด file object (f_inner) และส่งให้ Reader
+                f_inner = None 
                 try:
-                    r = PdfReader(file_path)
+                    f_inner = open(file_path, 'rb')
+                    r = PdfReader(f_inner)
                     for p in r.pages:
                         writer.add_page(p)
                 except Exception as e:
                     print(f"Error merging {file_path}: {e}")
                 finally:
-                    if r:
-                        r.close() # สั่ง .close() เอง
+                    if f_inner:
+                        f_inner.close() # ปิด file object ย่อย
                         
             if len(writer.pages) > 0:
                 sku_writers[primary_sku] = writer
